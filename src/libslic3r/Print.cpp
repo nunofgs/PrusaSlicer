@@ -434,6 +434,34 @@ static inline bool sequential_print_vertical_clearance_valid(const Print &print)
     return it == print_instances_ordered.end() || (*it)->print_object->height() <= scale_(print.config().extruder_clearance_height.value);
 }
 
+
+
+static bool is_custom_layering_equal(const std::vector<coordf_t>& first, const std::vector<coordf_t>& second)
+{
+    // The comparison of the profiles is not just about element-wise equality, some layers may not be
+    // explicitely included. Always remember z and height of last reference layer that in the vector
+    // and compare to that. In case some layers are in the vectors multiple times, only the last entry is
+    // taken into account and compared.
+    // Go through the tested profile and verify that each mentioned layer has the same height
+    // as deduced from the reference profile. Then vice versa.
+
+    for (size_t run=0; run<2; ++run) {
+        const std::vector<coordf_t>& tested = run == 0 ? first : second;
+        const std::vector<coordf_t>& ref    = run == 0 ? second : first;
+
+        coordf_t ref_z_idx = 0;
+        for (size_t i=0; i<tested.size(); i+=2) {
+            while (ref_z_idx+2 < ref.size() && ref[ref_z_idx+2] <= tested[i])
+                ref_z_idx += 2;
+            if (! is_approx(ref[ref_z_idx+1], tested[i+1]))
+                return false;
+        }
+    }
+    return true;
+}
+
+
+
 // Precondition: Print::validate() requires the Print::apply() to be called its invocation.
 std::string Print::validate(std::string* warning) const
 {
@@ -526,42 +554,11 @@ std::string Print::validate(std::string* warning) const
             }
 
             if (has_custom_layering) {
-                const std::vector<coordf_t> &layer_height_profile_tallest = layer_height_profiles[tallest_object_idx];
                 for (size_t idx_object = 0; idx_object < m_objects.size(); ++ idx_object) {
                     if (idx_object == tallest_object_idx)
                         continue;
-                    const std::vector<coordf_t> &layer_height_profile = layer_height_profiles[idx_object];
-
-                    // The comparison of the profiles is not just about element-wise equality, some layers may not be
-                    // explicitely included. Always remember z and height of last reference layer that in the vector
-                    // and compare to that. In case some layers are in the vectors multiple times, only the last entry is
-                    // taken into account and compared.
-                    size_t i = 0; // index into tested profile
-                    size_t j = 0; // index into reference profile
-                    coordf_t ref_z = -1.;
-                    coordf_t next_ref_z = layer_height_profile_tallest[0];
-                    coordf_t ref_height = -1.;
-                    while (i < layer_height_profile.size()) {
-                        coordf_t this_z = layer_height_profile[i];
-                        // find the last entry with this z
-                        while (i+2 < layer_height_profile.size() && layer_height_profile[i+2] == this_z)
-                            i += 2;
-
-                        coordf_t this_height = layer_height_profile[i+1];
-                        if (ref_height < -1. || next_ref_z < this_z + EPSILON) {
-                            ref_z = next_ref_z;
-                            do { // one layer can be in the vector several times
-                                ref_height = layer_height_profile_tallest[j+1];
-                                if (j+2 >= layer_height_profile_tallest.size())
-                                    break;
-                                j += 2;
-                                next_ref_z = layer_height_profile_tallest[j];
-                            } while (ref_z == next_ref_z);
-                        }
-                        if (std::abs(this_height - ref_height) > EPSILON)
-                            return L("The Wipe tower is only supported if all objects have the same variable layer height");
-                        i += 2;
-                    }
+                    if (! is_custom_layering_equal(layer_height_profiles[idx_object], layer_height_profiles[tallest_object_idx]))
+                        return L("The Wipe tower is only supported if all objects have the same variable layer height");
                 }
             }
         }
